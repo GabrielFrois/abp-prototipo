@@ -15,7 +15,7 @@ export function Modelo() {
       <p className="sub">Como a estimativa de desempenho e o risco de defasagem são produzidos, e o que ainda é ilustrativo neste protótipo.</p>
 
       <section className="card">
-        <h3>Pipeline previsto (RF02 e RNF03)</h3>
+        <h3>Pipeline previsto</h3>
         <ol className="steps">
           <li><b>Microdados do ENEM (Kaggle).</b> Notas por área e questionário socioeconômico, tratados e anonimizados.</li>
           <li><b>Treinamento e validação.</b> Regressão para a nota e classificação para a probabilidade de defasagem, com separação treino/teste.</li>
@@ -29,7 +29,7 @@ export function Modelo() {
         <p className="muted">
           O front-end usa uma <b>regra linear ilustrativa</b> (renda, escolaridade familiar e infraestrutura domiciliar) no lugar do modelo treinado.
           Ela fica isolada em <code>predict()</code> no arquivo <code>src/data.js</code> e deve ser trocada por uma chamada à API quando o modelo estiver implantado.
-          As médias de referência do ENEM usadas no comparativo (RF04) também são ilustrativas até que a base tratada esteja disponível.
+          As médias de referência do ENEM usadas no comparativo também são ilustrativas até que a base tratada esteja disponível.
         </p>
         <p className="muted">Risco: <b>Elevado</b> quando a nota estimada é ≤ 530 ou a frequência é &lt; 75%; <b>Atenção</b> quando ≤ 575 ou frequência &lt; 85%; caso contrário, <b>Menor</b>.</p>
       </section>

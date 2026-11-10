@@ -1,41 +1,18 @@
 import React, { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Icon from '../Icon.jsx'
-import { AREAS, ENEM_BASE, MT_ALERT, SCHOOLS, applyFilters, getDetail } from '../data.js'
+import { ENEM_BASE, MT_ALERT, SCHOOLS, applyFilters, getDetail } from '../data.js'
 import { downloadCSV, avg, pct } from '../utils.js'
 import { useStore } from '../store.jsx'
 import MoreFilters, { FILTER_LABELS } from '../Filters.jsx'
 
-function BarChart({ data }) {
-  const W = 600, H = 190, L = 40, B = 24, T = 10
-  const min = 400, max = 700
-  const y = (v) => T + (H - T - B) * (1 - (Math.max(min, Math.min(max, v)) - min) / (max - min))
-  const slot = (W - L) / data.length
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label="Desempenho previsto por área, com a média histórica do ENEM">
-      {[400, 500, 600, 700].map((t) => (
-        <g key={t}>
-          <line x1={L} x2={W} y1={y(t)} y2={y(t)} className="grid-line" />
-          <text x={L - 8} y={y(t) + 4} textAnchor="end" className="axis">{t}</text>
-        </g>
-      ))}
-      <line x1={L} x2={W} y1={y(600)} y2={y(600)} className="ref-line" />
-      {data.map((a, i) => {
-        const cx = L + slot * i + slot / 2
-        const bw = 30
-        return (
-          <g key={a.name}>
-            <rect x={cx - bw - 2} y={y(a.initial)} width={bw} height={y(min) - y(a.initial)} rx="3" className="bar-initial" />
-            <rect x={cx + 2} y={y(a.current)} width={bw} height={y(min) - y(a.current)} rx="3" className="bar-current" />
-            <text x={cx + 2 + bw / 2} y={y(a.current) + 15} textAnchor="middle" className="bar-label">{Math.round(a.current)}</text>
-            <line x1={cx - bw - 8} x2={cx + bw + 8} y1={y(a.base)} y2={y(a.base)} className="base-line" />
-            <text x={cx} y={H - 6} textAnchor="middle" className="axis">{a.name}</text>
-          </g>
-        )
-      })}
-    </svg>
-  )
-}
+// Média nacional do ENEM (referência ilustrativa, média das 4 áreas, sem redação).
+// Mesma conta da página Turmas, para os números baterem entre as telas.
+const NATIONAL = Object.values(ENEM_BASE).reduce((a, b) => a + b, 0) / Object.values(ENEM_BASE).length
+// Diferença (em pts) que ocupa metade da barra de comparação.
+const DIFF_MAX = 100
+// Percentual de risco elevado que enche a barra por completo (escala fixa, igual para todas as turmas).
+const RISK_BAR_MAX = 50
 
 function Donut({ data }) {
   const total = data.reduce((s, d) => s + d.value, 0)
@@ -60,6 +37,21 @@ function Donut({ data }) {
   )
 }
 
+// Barra centrada na média nacional: cresce para a direita (acima) ou para a esquerda (abaixo).
+function DiffCell({ diff, enem }) {
+  const w = Math.min(50, (Math.abs(diff) / DIFF_MAX) * 50)
+  const up = diff >= 0
+  const label = diff === 0 ? 'Na média' : `${Math.abs(diff)} pts ${up ? 'acima' : 'abaixo'}`
+  return (
+    <span className="diff" title={`Média estimada da turma: ${enem} pts · média nacional: ${Math.round(NATIONAL)} pts (ref. ilustrativa)`}>
+      <b className={up ? 'up' : 'down'}>{label}</b>
+      <span className="diff-track" aria-hidden="true">
+        <i className={up ? 'pos' : 'neg'} style={up ? { left: '50%', width: w + '%' } : { right: '50%', width: w + '%' }} />
+      </span>
+    </span>
+  )
+}
+
 export default function Overview() {
   const { students, turmas } = useStore()
   const [f, setF] = useState({ school: '', turma: '', renda: '', esc: '', infra: '' })
@@ -75,19 +67,51 @@ export default function Overview() {
     { label: 'Atenção', value: count('Atenção'), color: '#d4a54a' },
     { label: 'Menor', value: count('Menor'), color: '#0d7c78' },
   ]
-  const lowFreq = list.filter((s) => s.freq < 75).length
-  const matNeed = list.filter((s) => getDetail(s).areas.MT < MT_ALERT).length
 
-  const areas = useMemo(() => AREAS.map((a) => {
-    const current = avg(list, (s) => getDetail(s).areas[a.key])
-    return { name: a.name, current, initial: current - a.gain, base: ENEM_BASE[a.key], key: a.key }
-  }), [list])
+  const isLowFreq = (s) => s.freq < 75
+  const isNoPlan = (s) => s.risk === 'Elevado' && !s.hasPlan
+  const isMatNeed = (s) => getDetail(s).areas.MT < MT_ALERT
+  const lowFreq = list.filter(isLowFreq).length
+  const noPlan = list.filter(isNoPlan).length
+  const matNeed = list.filter(isMatNeed).length
 
   const turmaRows = turmas.map((t) => {
     const ts = list.filter((s) => s.turma === t.nome)
     const h = ts.filter((s) => s.risk === 'Elevado').length
-    return { name: t.nome.replace('ª ', 'ª Série '), nome: t.nome, students: ts.length, enem: Math.round(avg(ts, (s) => s.enem)), high: h, pct: pct(h, ts.length) }
+    const mean = avg(ts, (s) => s.enem)
+    return {
+      name: t.nome.replace('ª ', 'ª Série '), nome: t.nome, students: ts.length,
+      enem: Math.round(mean), diff: Math.round(mean - NATIONAL), high: h, pct: pct(h, ts.length),
+    }
   }).filter((t) => t.students > 0)
+
+  // Turma com mais casos de cada sinal (só faz sentido comparar com 2 ou mais turmas).
+  const topTurma = (pred) => {
+    if (turmaRows.length < 2) return null
+    const c = {}
+    list.filter(pred).forEach((s) => { c[s.turma] = (c[s.turma] || 0) + 1 })
+    const top = Object.entries(c).sort((a, b) => b[1] - a[1])[0]
+    return top ? { turma: top[0], n: top[1] } : null
+  }
+
+  const turmaQS = f.turma ? '&turma=' + encodeURIComponent(f.turma) : ''
+  const actions = [
+    {
+      key: 'plano', tone: 'tone-red', n: noPlan, what: 'em risco elevado, sem plano de apoio',
+      hint: 'Ainda não há um plano definido para acompanhá-los.',
+      cta: 'Definir planos', to: `/estudantes?tab=semplano${turmaQS}`, where: topTurma(isNoPlan),
+    },
+    {
+      key: 'faltas', tone: 'tone-amber', n: lowFreq, what: 'com faltas recorrentes',
+      hint: 'Frequência abaixo de 75% nas últimas 4 semanas. Vale conversar sobre o que dificulta a presença.',
+      cta: 'Ver estudantes', to: `/estudantes?freqMax=75${turmaQS}`, where: topTurma(isLowFreq),
+    },
+    {
+      key: 'mat', tone: 'tone-teal', n: matNeed, what: 'precisam de reforço em matemática',
+      hint: `Estimativa de matemática abaixo de ${MT_ALERT} pts.`,
+      cta: 'Planejar reforço', to: `/estudantes?mtMax=${MT_ALERT}${turmaQS}`, where: topTurma(isMatNeed),
+    },
+  ]
 
   const nSchools = new Set(list.map((s) => s.school)).size
   const chips = FILTER_LABELS(f)
@@ -99,13 +123,14 @@ export default function Overview() {
       ['Risco elevado', high],
       ['Atenção', count('Atenção')],
       ['Risco menor', count('Menor')],
+      ['Risco elevado sem plano de apoio', noPlan],
       ['Estudantes com frequência < 75%', lowFreq],
+      [`Estudantes com matemática estimada < ${MT_ALERT} pts`, matNeed],
       [],
-      ['Área', 'Estimativa atual', 'Diagnóstico inicial', 'Média base ENEM (ilustrativa)', 'Diferença vs base'],
-      ...areas.map((a) => [a.name, Math.round(a.current), Math.round(a.initial), a.base, Math.round(a.current - a.base)]),
+      ['Média nacional do ENEM (ilustrativa)', Math.round(NATIONAL)],
       [],
-      ['Turma', 'Estudantes', 'ENEM estimado', 'Risco elevado', '% da turma'],
-      ...turmaRows.map((t) => [t.nome, t.students, t.enem, t.high, t.pct + '%']),
+      ['Turma', 'Estudantes', 'Diferença vs média nacional (pts)', 'Risco elevado', '% da turma'],
+      ...turmaRows.map((t) => [t.nome, t.students, t.diff, t.high, t.pct + '%']),
     ])
 
   return (
@@ -157,25 +182,31 @@ export default function Overview() {
       <div className="grid-chart">
         <section className="card">
           <div className="card-head">
-            <div><h3>Desempenho previsto</h3><p className="muted small">Média por área · escala de pontos · sem redação</p></div>
-            <Link className="link" to="/modelo">Entender estimativa ↗</Link>
-          </div>
-          <div className="legend small muted">
-            <span><i className="sw light" /> Diagnóstico inicial</span>
-            <span><i className="sw teal" /> Estimativa atual</span>
-            <span><i className="sw dash" /> Referência pedagógica: 600</span>
-            <span><i className="sw base" /> Média histórica ENEM</span>
-          </div>
-          {total ? <BarChart data={areas} /> : <p className="empty">Nenhum estudante na seleção.</p>}
-          {total > 0 && (
-            <div className="cmp">
-              {areas.map((a) => {
-                const d = Math.round(a.current - a.base)
-                return <span key={a.key} className={d >= 0 ? 'up' : 'down'}><b>{a.name}</b> {d >= 0 ? '+' : '−'}{Math.abs(d)} vs base</span>
-              })}
+            <div>
+              <h3>Um olhar para cada turma</h3>
+              <p className="muted small">3ª série · comparado à média nacional do ENEM ({Math.round(NATIONAL)} pts)</p>
             </div>
-          )}
-          <p className="muted small">Comparativo com a base histórica do ENEM (valores de referência ilustrativos).</p>
+            <Link className="link" to="/turmas">Ver turmas ↗</Link>
+          </div>
+          <table className="mini-table">
+            <thead><tr><th>Turma</th><th>Estudantes</th><th>vs. média nacional do ENEM</th><th>Risco elevado</th></tr></thead>
+            <tbody>
+              {turmaRows.map((t) => (
+                <tr key={t.nome}>
+                  <td><Icon name="class" /> <Link className="turma-link" to={`/estudantes?turma=${encodeURIComponent(t.nome)}`}>{t.name}</Link></td>
+                  <td>{t.students}</td>
+                  <td><DiffCell diff={t.diff} enem={t.enem} /></td>
+                  <td>
+                    <span className="red">{t.high}</span>
+                    <span className="bar"><span style={{ width: Math.min(100, (t.pct / RISK_BAR_MAX) * 100) + '%' }} /></span>
+                    <span className="muted small">{t.pct}%</span>
+                  </td>
+                </tr>
+              ))}
+              {turmaRows.length === 0 && <tr><td colSpan="4" className="empty">Sem turmas na seleção.</td></tr>}
+            </tbody>
+          </table>
+          <p className="muted small">A barra mostra a distância da média da turma até a média nacional (referência ilustrativa, 4 áreas, sem redação). Compare contextos e necessidades, não rankings.</p>
         </section>
         <section className="card">
           <div className="card-head"><div><h3>Distribuição de risco</h3><p className="muted small">Prioridade de acompanhamento na rede</p></div></div>
@@ -195,47 +226,28 @@ export default function Overview() {
         </section>
       </div>
 
-      <div className="grid-bottom">
-        <section className="card">
-          <h3>Onde agir agora</h3>
-          <p className="muted small">Sinais que merecem uma conversa</p>
-          <div className="action">
-            <div className="action-title amber"><Icon name="calendar" /> {lowFreq} estudantes com faltas recorrentes</div>
-            <p className="muted small">Frequência abaixo de 75% nas últimas 4 semanas. Investigue barreiras de permanência.</p>
-            <Link className="link" to={`/estudantes?freqMax=75${f.turma ? '&turma=' + encodeURIComponent(f.turma) : ''}`}>Revisar estudantes prioritários →</Link>
-          </div>
-          <div className="action">
-            <div className="action-title"><Icon name="book" /> {matNeed} precisam de apoio em matemática</div>
-            <p className="muted small">Estimativa de matemática abaixo de {MT_ALERT} pts, bem distante da referência pedagógica.</p>
-            <Link className="link" to={`/estudantes?mtMax=${MT_ALERT}`}>Planejar reforço direcionado →</Link>
-          </div>
-        </section>
-        <section className="card">
-          <div className="card-head">
-            <div><h3>Um olhar para cada Turma</h3><p className="muted small">Unidades fictícias · 3ª série do ensino médio</p></div>
-            <Link className="link" to="/turmas">Ver Turmas ↗</Link>
-          </div>
-          <table className="mini-table">
-            <thead><tr><th>Turma</th><th>Estudantes</th><th>ENEM estimado</th><th>Risco elevado</th></tr></thead>
-            <tbody>
-              {turmaRows.map((t) => (
-                <tr key={t.nome}>
-                  <td><Icon name="class" /> {t.name}</td>
-                  <td>{t.students}</td>
-                  <td><b>{t.enem} pts</b></td>
-                  <td>
-                    <span className="red">{t.high}</span>
-                    <span className="bar"><span style={{ width: Math.min(100, t.pct * 3) + '%' }} /></span>
-                    <span className="muted small">{t.pct}%</span>
-                  </td>
-                </tr>
-              ))}
-              {turmaRows.length === 0 && <tr><td colSpan="4" className="empty">Sem turmas na seleção.</td></tr>}
-            </tbody>
-          </table>
-          <p className="muted small">Compare contextos e necessidades, não rankings de escolas.</p>
-        </section>
-      </div>
+      <section className="card">
+        <h3>Onde agir agora</h3>
+        <p className="muted small">Em ordem de prioridade. Cada botão abre a lista de estudantes já filtrada.</p>
+        <div className="act-grid">
+          {actions.map((a, i) => (
+            <article className={'act-card ' + a.tone} key={a.key}>
+              <div className="act-top">Prioridade {i + 1}</div>
+              <div className="act-num">{a.n}<small>{a.n === 1 ? 'estudante' : 'estudantes'}</small></div>
+              <div className="act-label">{a.what}</div>
+              {a.n > 0 ? (
+                <>
+                  <p className="muted small">{a.hint}</p>
+                  {a.where && <p className="small act-where">Mais casos: <b>{a.where.turma}</b> ({a.where.n})</p>}
+                  <Link className="btn sm act-cta" to={a.to}>{a.cta}</Link>
+                </>
+              ) : (
+                <p className="small act-ok">Nenhum caso na seleção.</p>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
 
       <div className="notice"><Icon name="info" /> Predições são estimativas de apoio à decisão, não destinos individuais. As faixas expressam incerteza ilustrativa; a equipe escolar deve contextualizar cada sinal antes de intervir.</div>
       <footer className="foot"><span>Dados sintéticos. Métricas, pessoas e resultados do modelo são ilustrativos.</span><span>Farol.IA · FATEC Jacareí</span></footer>
